@@ -1,0 +1,158 @@
+/*
+Program: Radbot_FINAL.ino
+
+Author: Matt Pistacchio
+
+Date: 04/28/2014
+
+Overview: Configures pins for input and output, 
+checks clock to see if desired sampling time is met, 
+converts GPS coordinates to rectangular distance, conducts boolean 
+whether threshhold rectangular distance is met or not, samples light 
+sensor if threshold is met, transmits data to the serial port to be 
+mapped. Tone emits to signal program is communicating wirelessly.
+
+*/
+
+////////////////////Imported Libraries////////////////////////////
+#include <string.h>
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <Tone.h>
+
+///////////////////////Definitions////////////////////////////////
+//XBee Pro 60 mW - Series 1 (RC motor control)
+#define XBEERX 1 //Xbee rx
+#define XBEETX 0 //Xbee tx
+//EM-506 (48 Channel) GPS Receiver
+#define GRXPIN 12 //GPS rx 
+#define GTXPIN 11 //GPS tx 
+//Mini Photocell/Photoresistor
+#define LIGHT A0 //sole pin for photocell
+//Baud Rates
+#define TERMBAUD 9600 //Hardware serial to send returns
+#define GPSBAUD 4800 //Software serial to receive GPS
+
+////////////////////Global Variables//////////////////////////////
+//Defined clock function variables
+unsigned long tS = 9600; //Sampling time/desired time delay in ms
+unsigned long t0 = millis();
+//Defined GPS data collection variables
+SoftwareSerial uart_gps(GRXPIN,GTXPIN); //initialize the library, UART = universal asynchronous receiver-transmitt
+TinyGPSPlus gps; //create instance of TinyGPSPlus object
+int count = 0; //counter to determine line number of data
+double dist_min = 2; //comparative minimum distance in meters
+double lat_x1, lon_y1, lat_x2, lon_y2; //lat/long pairs to calculate distance
+
+///////////////////////Functions//////////////////////////////////
+void clock(); //checks clock to insure prescribed sampling time is met
+boolean MeetMinDist(TinyGPSPlus &gps,double x1, double x2, double y1, double y2, double dist_min); 
+//      ^determines if within threshold rectangular distance
+
+/////////////////////////Setup////////////////////////////////////
+//standard setup routine, runs once you press reset
+void setup()
+{
+  Serial.begin(TERMBAUD); //set baud rate of terminal program
+  uart_gps.begin(GPSBAUD); //set baud rate of gps 
+  //setting all defined pins to either input or output
+  pinMode(XBEETX,OUTPUT);
+  pinMode(XBEERX,INPUT);
+  pinMode(GTXPIN,INPUT); //Transmitted GPS data from the receiver is our input
+  pinMode(GRXPIN,INPUT);
+  pinMode(LIGHT,INPUT);
+  pinMode(3,OUTPUT);
+}
+int flag = 0;
+
+/////////////////////Main Loop////////////////////////////////////
+void loop() //will run as long as device is on
+{  
+  while(uart_gps.available()>0) //while there is data on the gps rx
+  {
+    flag++;
+    
+    int temp = uart_gps.read(); //store the data
+    if(gps.encode(temp)) //if there is a valid reading
+    {
+      if(count == 0) //if at first line of NMEA data,
+      {
+        //Serial.println("Here!");
+        //store initial set of coords
+        lat_x1 = gps.location.lat();
+        lon_y1 = gps.location.lng();
+      }
+      else
+      {
+        //store the next set
+        //Serial.println("No");
+        lat_x2 = gps.location.lat();
+        lon_y2 = gps.location.lng();
+      }
+      //see if rectangular distance threshold is met
+      if(MeetMinDist(gps,lat_x1,lat_x2,lon_y1,lon_y2,dist_min))
+      {
+        //Emit tone when transmitting
+         tone(3, 1230);
+      delay(200);
+           tone(3, 1690);
+           delay(200);
+           noTone(3);
+        //Gimme those coords and the sensor reading, we did it!
+        //Send serially to be mapped; all on one line
+        Serial.print('^'); //delimiters to fix spacing problem
+        Serial.print(gps.location.lat(), 6);
+        Serial.print('^');
+        Serial.print('^');
+        Serial.print(gps.location.lng(), 6);
+        Serial.print('^');
+        Serial.print('^');
+        Serial.print(analogRead(LIGHT));
+        Serial.print('^');
+        Serial.print('|'); //terminator to signify one set of coordinates to mapped
+      }
+      else
+      {        
+        clock(); //check the clock
+      }
+      
+      count++; //increment counter 
+      
+      //Save for next distance calculation
+      lat_x2 = lat_x1;
+      lon_y2 = lon_y1;
+    }
+  }
+}
+
+///////////////////Defined Functions//////////////////////////////
+/* Where the magic happens */
+//Clock Function
+void clock()
+{
+  //Clock function inserts a delay so that the GPS checking occurs X times per second
+  unsigned long tN = millis(); //set new time
+  unsigned long Dt = tN - t0; //note change in time
+  t0 = tN; //reset old time
+  unsigned long pause = tS - Dt; //measure for whether to delay
+  if(pause > 0) 
+  {
+    delay(pause); //this means not running behind
+  }
+  else
+  {
+    Serial.println("running behind!"); //testing purposes
+  }
+}
+
+//Now compare rectangular distance to preset min
+boolean MeetMinDist(TinyGPSPlus &gps,double x1, double x2, double y1, double y2, double dist_min)
+{
+  //enable mem function to find rectangular distance, in meters
+  double distance = gps.distanceBetween(x1,y1,x2,y2); 
+  if(distance>dist_min) //if within threshold...
+  {return true;}
+  else {return false;}
+}
+
+///////////////////////Fin////////////////////////////////////////
